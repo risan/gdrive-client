@@ -1,0 +1,12 @@
+#!/bin/sh
+# C compiler for the static musl build: Zig bundles musl, so no musl cross toolchain is needed.
+# cc-rs passes the Rust triple as --target=..., which Zig cannot parse; the -target below replaces it.
+for argument in "$@"; do
+    shift
+    case "$argument" in
+        --target=*) ;;
+        *) set -- "$@" "$argument" ;;
+    esac
+done
+
+exec zig cc -target x86_64-linux-musl "$@"
