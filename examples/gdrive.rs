@@ -139,8 +139,17 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         }
         _ => open(arguments)?,
     };
-    let code = match command.as_slice() {
-        ["upload", local, folder_path] => upload(&client, Path::new(local), folder_path)?,
+    let outcome = run_with_client(&client, &command);
+
+    // Also after a failed command: a token refreshed before the failure may not have been stored.
+    report_store_failure(&client);
+    outcome
+}
+
+fn run_with_client(client: &Client, command: &[&str]) -> Result<ExitCode, String> {
+    let fail = |error: gdrive_client::Error| error.to_string();
+    let code = match command {
+        ["upload", local, folder_path] => upload(client, Path::new(local), folder_path)?,
         ["list", folder_path] => {
             let folder = client.folder_id(folder_path).map_err(fail)?;
 
@@ -173,7 +182,6 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         _ => return Err(USAGE.to_string()),
     };
 
-    report_store_failure(&client);
     Ok(code)
 }
 
