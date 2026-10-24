@@ -259,6 +259,76 @@ fn find_returns_every_exact_match() {
 }
 
 #[test]
+fn delete_removes_the_file() {
+    let env = env();
+    let id = env.fake.add_file("root", "doomed.bin", b"x");
+
+    env.client.delete(&id).unwrap();
+
+    assert!(env.fake.file(&id).is_none());
+}
+
+#[test]
+fn retried_delete_that_was_applied_succeeds() {
+    let env = env();
+    let id = env.fake.add_file("root", "doomed.bin", b"x");
+
+    env.fake.fault(Kind::Delete, Fault::ApplyThenClose);
+
+    env.client.delete(&id).unwrap();
+
+    assert!(env.fake.file(&id).is_none());
+    assert_eq!(env.fake.requests_of(Kind::Delete).len(), 2);
+}
+
+#[test]
+fn delete_of_an_unknown_id_fails() {
+    let env = env();
+
+    match env.client.delete("no-such-id") {
+        Err(Error::Http {
+            status,
+            operation,
+            target,
+            ..
+        }) => {
+            assert_eq!(status, 404);
+            assert_eq!(operation, Operation::Delete);
+            assert_eq!(target, "no-such-id");
+        }
+        other => panic!("expected Http 404, got {other:?}"),
+    }
+
+    assert_eq!(env.fake.requests_of(Kind::Delete).len(), 1);
+}
+
+#[test]
+fn trash_moves_to_the_trash() {
+    let env = env();
+    let folder = env.fake.add_folder("root", "data");
+    let id = env.fake.add_file(&folder, "old.bin", b"x");
+
+    env.fake.add_file(&folder, "keep.bin", b"y");
+    env.client.trash(&id).unwrap();
+
+    assert!(env.client.metadata(&id).unwrap().trashed);
+
+    let names: Vec<_> = env
+        .client
+        .list_files(&folder)
+        .unwrap()
+        .into_iter()
+        .map(|file| file.name)
+        .collect();
+
+    assert_eq!(names, ["keep.bin"]);
+    assert!(matches!(
+        env.client.trash("no-such-id"),
+        Err(Error::Http { status: 404, .. })
+    ));
+}
+
+#[test]
 fn quotes_and_backslashes_are_escaped() {
     let env = env();
     let folder_name = r"it's\here";

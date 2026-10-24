@@ -146,17 +146,18 @@ impl Client {
         })
     }
 
-    /// One attempt of an authorized request: a bearer token, and one forced refresh when Drive answers 401.
-    pub(crate) fn attempt(
+    /// Sends a request with a bearer token and returns the response unread. A 401 spends the one forced refresh and
+    /// asks the caller to resend at once.
+    pub(crate) fn send_authorized(
         &self,
         call: &Call,
         request: &Request<'_>,
         retrying: &mut Retrying,
-    ) -> Result<Answer, Failure> {
+    ) -> Result<ureq::http::Response<ureq::Body>, Failure> {
         let token = self.token(call, Need::Current).map_err(Failure::Fatal)?;
-        let answer = self.transport.exchange(call, request, Some(&token.secret))?;
+        let response = self.transport.send(call, request, Some(&token.secret))?;
 
-        if answer.status == 401 && !retrying.reauthenticated {
+        if response.status().as_u16() == 401 && !retrying.reauthenticated {
             retrying.reauthenticated = true;
             self.token(call, Need::AfterUnauthorized(token.generation))
                 .map_err(Failure::Fatal)?;
@@ -164,7 +165,19 @@ impl Client {
             return Err(Failure::Reauthenticated);
         }
 
-        Ok(answer)
+        Ok(response)
+    }
+
+    /// One attempt of an authorized request: send, read the body, judge the status.
+    pub(crate) fn attempt(
+        &self,
+        call: &Call,
+        request: &Request<'_>,
+        retrying: &mut Retrying,
+    ) -> Result<Answer, Failure> {
+        let response = self.send_authorized(call, request, retrying)?;
+
+        self.transport.answer(call, request, response)
     }
 
     /// Sends an authorized request, retrying transient failures, until an answer to act on or the deadline.

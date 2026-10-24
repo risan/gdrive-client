@@ -4,20 +4,17 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 use serde_json::{Value, json};
 
 use crate::credentials::Credentials;
 use crate::error::{Error, TokenStoreProblem};
 use crate::secret::Secret;
+use crate::temp;
 
 const VERSION: u64 = 1;
 const STORE_MODE: u32 = 0o600;
-
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// What the file holds. `access_token_refresh_at` is a wall-clock time in unix seconds, with the 60 s margin applied.
 pub(crate) struct StoredTokens {
@@ -115,26 +112,14 @@ pub(crate) fn save(path: &Path, tokens: &StoredTokens) -> Result<(), Error> {
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let directory = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the path has no file name"))?;
-    let temp: PathBuf = directory.join(format!(
-        ".{}.{}.{}.tmp",
-        name.to_string_lossy(),
-        process::id(),
-        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
+    let temp = temp::sibling(path, "tmp")?;
 
     if let Err(error) = write_temp_then_rename(&temp, path, bytes) {
         let _ = fs::remove_file(&temp);
         return Err(error);
     }
 
-    File::open(directory)?.sync_all()
+    temp::sync_directory(temp::directory_of(path))
 }
 
 fn write_temp_then_rename(temp: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {

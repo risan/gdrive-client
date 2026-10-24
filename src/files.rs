@@ -70,6 +70,46 @@ impl Client {
         DriveFile::from_json(&value).map_err(|detail| call.protocol_error(&detail))
     }
 
+    /// Deletes a file permanently.
+    pub fn delete(&self, file_id: &str) -> Result<(), Error> {
+        let call = self.call(Operation::Delete, file_id);
+        let url = self.drive_url(&format!("/drive/v3/files/{}", encode_component(file_id)), &[]);
+        let request = Request::drive(Method::Delete, url);
+        let mut retrying = Retrying::new();
+        let mut retried = false;
+
+        loop {
+            match self.attempt(&call, &request, &mut retrying) {
+                Ok(answer) if matches!(answer.status, 200 | 204) => return Ok(()),
+                // The earlier attempt was applied and its answer lost.
+                Ok(answer) if answer.status == 404 && retried => return Ok(()),
+                Ok(answer) => return Err(call.http_error(&answer)),
+                Err(Failure::Reauthenticated) => {}
+                Err(Failure::Transient {
+                    description,
+                    retry_after,
+                }) => {
+                    retrying.pause(self.transport(), &call, &description, retry_after)?;
+                    retried = true;
+                }
+                Err(Failure::Fatal(error)) => return Err(error),
+            }
+        }
+    }
+
+    /// Moves a file to the trash; it can be restored from there.
+    pub fn trash(&self, file_id: &str) -> Result<(), Error> {
+        let call = self.call(Operation::Trash, file_id);
+        let url = self.drive_url(
+            &format!("/drive/v3/files/{}", encode_component(file_id)),
+            &[("fields", "id")],
+        );
+        let body = json!({"trashed": true}).to_string();
+        let answer = self.execute(&call, &Request::drive(Method::Patch, url).json_body(&body))?;
+
+        call.expect_json(&answer, &[200]).map(|_| ())
+    }
+
     /// The id of the folder at `path` below My Drive's root (`a/b/c`). Trashed folders do not count; two folders with
     /// one name under one parent are a `DuplicateFolder` error.
     pub fn folder_id(&self, path: &str) -> Result<String, Error> {
