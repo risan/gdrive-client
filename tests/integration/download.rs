@@ -7,7 +7,7 @@ use std::time::Duration;
 use gdrive_client::Error;
 use md5::{Digest, Md5};
 
-use crate::support::{Env, Fault, Kind, env, env_with};
+use crate::support::{Env, FakeDrive, Fault, Kind, env, env_with};
 
 fn pattern(length: usize) -> Vec<u8> {
     (0..length)
@@ -138,6 +138,33 @@ fn malformed_redirect_is_not_echoed() {
     }
 
     assert!(names_in(&target).is_empty());
+}
+
+#[test]
+fn a_redirect_to_another_origin_carries_no_bearer_token() {
+    let env = env();
+    let data = pattern(1000);
+    let id = env.fake.add_file("root", "remote.bin", &data);
+    let other = FakeDrive::start();
+    let other_id = other.add_file("root", "remote.bin", &data);
+    let target = destination(&env);
+
+    env.fake.fault(
+        Kind::Download,
+        Fault::Redirect {
+            status: 302,
+            location: format!("{}/drive/v3/files/{other_id}?alt=media", other.url()),
+        },
+    );
+
+    // The other origin answers 401 without a token; the client refreshes once and resends to the Drive endpoint.
+    env.client.download(&id, &target).unwrap();
+
+    let followed = other.requests_of(Kind::Download);
+
+    assert_eq!(followed.len(), 1, "{followed:?}");
+    assert_eq!(followed[0].authorization, None);
+    assert_eq!(fs::read(&target).unwrap(), data);
 }
 
 #[test]
