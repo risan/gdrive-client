@@ -55,7 +55,6 @@ pub(crate) struct Request<'a> {
     pub headers: Vec<(&'static str, String)>,
     pub body: &'a [u8],
     pub service: Service,
-    pub authorized: bool,
     pub max_redirects: u32,
 }
 
@@ -68,7 +67,6 @@ impl<'a> Request<'a> {
             headers: Vec::new(),
             body: &[],
             service: Service::Drive,
-            authorized: true,
             max_redirects: 0,
         }
     }
@@ -81,7 +79,6 @@ impl<'a> Request<'a> {
             headers: vec![("Content-Type", "application/x-www-form-urlencoded".to_string())],
             body: form.as_bytes(),
             service: Service::OAuth,
-            authorized: false,
             max_redirects: 0,
         }
     }
@@ -243,7 +240,6 @@ impl Call {
 /// A complete answer: status, the headers the library reads, and the body.
 pub(crate) struct Answer {
     pub status: u16,
-    pub retry_after: Option<Duration>,
     pub location: Option<String>,
     pub range: Option<String>,
     pub body: Vec<u8>,
@@ -476,7 +472,6 @@ impl Transport {
 
         Ok(Answer {
             status,
-            retry_after,
             location,
             range,
             body,

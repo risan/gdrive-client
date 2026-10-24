@@ -323,20 +323,16 @@ impl Coordinator {
         let state = self.lock();
 
         Inspect {
-            access_token: state.access_token.as_ref().map(|token| token.expose().to_string()),
             refresh_token: state.credentials.refresh_token.expose().to_string(),
             owed: state.owed,
-            generation: state.generation,
         }
     }
 }
 
 #[cfg(test)]
 pub(crate) struct Inspect {
-    pub access_token: Option<String>,
     pub refresh_token: String,
     pub owed: Owed,
-    pub generation: u64,
 }
 
 /// When to refresh a token received now: `expires_in` minus the margin, as a monotonic moment and as unix seconds.

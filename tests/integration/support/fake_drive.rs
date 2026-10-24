@@ -158,17 +158,12 @@ impl RequestRecord {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value)
     }
-
-    pub fn json_body(&self) -> Value {
-        serde_json::from_slice(&self.body).unwrap_or(Value::Null)
-    }
 }
 
 #[derive(Clone, Debug)]
 pub struct StoredFile {
     pub id: String,
     pub name: String,
-    pub mime_type: String,
     pub parents: Vec<String>,
     pub trashed: bool,
     pub size: Option<u64>,
@@ -399,10 +394,6 @@ impl FakeDrive {
         self.state().rotate = rotate;
     }
 
-    pub fn add_refresh_token(&self, token: &str) {
-        self.state().refresh_tokens.insert(token.to_string());
-    }
-
     pub fn refresh_tokens(&self) -> Vec<String> {
         let mut tokens: Vec<String> = self.state().refresh_tokens.iter().cloned().collect();
 
@@ -537,10 +528,6 @@ impl FakeDrive {
             .filter(|record| record.kind == kind)
             .collect()
     }
-
-    pub fn clear_requests(&self) {
-        self.state().log.clear();
-    }
 }
 
 impl Drop for FakeDrive {
@@ -571,7 +558,6 @@ fn stored_file(entry: &FileEntry) -> StoredFile {
     StoredFile {
         id: entry.id.clone(),
         name: entry.name.clone(),
-        mime_type: entry.mime_type.clone(),
         parents: entry.parents.clone(),
         trashed: entry.trashed,
         size,

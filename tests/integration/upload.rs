@@ -71,6 +71,7 @@ fn uploads_a_new_file_in_chunks() {
 
     assert_eq!(stored.content.as_deref(), Some(data.as_slice()));
     assert_eq!(stored.name, "new.bin");
+    assert_eq!(stored.size, Some(data.len() as u64));
     assert_eq!(stored.parents, [folder]);
     assert_eq!(upload.file.size, Some(data.len() as u64));
     assert_eq!(upload.file.md5.as_deref(), Some(md5_hex(&data).as_str()));
