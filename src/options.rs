@@ -10,7 +10,7 @@ const CHUNK_UNIT: usize = 256 * 1024;
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Time budget of each call, measured from its start. It bounds network requests, retries, backoff sleeps, token
-    /// refreshes and waits on other calls, not local file I/O.
+    /// refreshes and waits on other calls, not local file I/O. A budget above ten years counts as ten years.
     pub deadline: Duration,
     /// Upload chunk size in bytes: a positive multiple of 256 KiB. The chunk buffer is the only memory that scales
     /// with it.

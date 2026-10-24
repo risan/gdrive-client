@@ -92,7 +92,8 @@ impl DeviceLogin {
 
     /// Polls at Google's interval until the user approves (the credentials), denies, or the code expires. Each poll's
     /// transient failures are retried until `options.deadline` after that poll began or the code's expiry, whichever
-    /// is first.
+    /// is first. A retry whose delay (`Retry-After`, the interval or the backoff) would end after the code's expiry is
+    /// not waited for: no approval can arrive in time, so the answer is `LoginExpired` at once.
     pub fn wait(self) -> Result<Credentials, Error> {
         let mut interval = self.interval;
         let form = form_body(&[
