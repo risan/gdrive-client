@@ -1,5 +1,4 @@
-//! A small blocking Google Drive client.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![allow(dead_code)] // removed in S14, once every module is wired in
 
