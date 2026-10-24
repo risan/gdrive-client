@@ -464,7 +464,7 @@ fn session_url_on_another_origin_is_refused() {
     for foreign in [
         format!("http://127.0.0.1:{}/upload/drive/v3/files?upload_id=x", fake_port + 1),
         format!("{fake_url}.attacker.example/upload/drive/v3/files?upload_id=x"),
-        "https://www.googleapis.com/upload/drive/v3/files?upload_id=x".to_string(),
+        "https://drive.attacker.example/upload/drive/v3/files?upload_id=x".to_string(),
     ] {
         env.fake
             .fault(Kind::UploadInit, Fault::ForeignLocation(foreign.clone()));
