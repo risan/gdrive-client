@@ -92,7 +92,7 @@ impl Client {
                     retrying.pause(self.transport(), &call, &description, retry_after)?;
                     retried = true;
                 }
-                Err(Failure::Fatal(error)) => return Err(error),
+                Err(Failure::Fatal(error)) => return Err(retrying.attribute(error)),
             }
         }
     }
@@ -259,7 +259,7 @@ impl Client {
                     retrying.pause(self.transport(), &call, &description, retry_after)?;
                     look_first = true;
                 }
-                Err(Failure::Fatal(error)) => return Err(error),
+                Err(Failure::Fatal(error)) => return Err(retrying.attribute(error)),
             }
         }
     }

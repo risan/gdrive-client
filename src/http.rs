@@ -502,7 +502,7 @@ impl Transport {
                     retry_after,
                 }) => retrying.pause(self, call, &description, retry_after)?,
                 Err(Failure::Reauthenticated) => {}
-                Err(Failure::Fatal(error)) => return Err(error),
+                Err(Failure::Fatal(error)) => return Err(retrying.attribute(error)),
             }
         }
     }
@@ -543,6 +543,25 @@ impl Retrying {
         let backoff = self.record_failure(transport, description);
 
         retry_after.unwrap_or(backoff)
+    }
+
+    /// A deadline that passes while an attempt is in flight reports the failure that made the request retry, not only
+    /// "timed out".
+    pub fn attribute(&self, error: Error) -> Error {
+        match error {
+            Error::Deadline {
+                operation,
+                target,
+                confirmed_bytes,
+                last_failure,
+            } if !self.last_failure.is_empty() => Error::Deadline {
+                operation,
+                target,
+                confirmed_bytes,
+                last_failure: format!("{}; then {last_failure}", self.last_failure),
+            },
+            other => other,
+        }
     }
 
     /// Sleeps for the delay, or returns `Deadline` at once when the delay would end past the deadline.

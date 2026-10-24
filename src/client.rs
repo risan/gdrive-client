@@ -192,7 +192,7 @@ impl Client {
                     description,
                     retry_after,
                 }) => retrying.pause(&self.transport, call, &description, retry_after)?,
-                Err(Failure::Fatal(error)) => return Err(error),
+                Err(Failure::Fatal(error)) => return Err(retrying.attribute(error)),
             }
         }
     }

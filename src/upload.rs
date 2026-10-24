@@ -262,7 +262,7 @@ impl Client {
                     retrying.pause(self.transport(), call, &description, retry_after)?;
                     querying = true;
                 }
-                Err(Failure::Fatal(error)) => return Err(error),
+                Err(Failure::Fatal(error)) => return Err(retrying.attribute(error)),
             }
         }
     }

@@ -512,15 +512,11 @@ fn secrets_absent_from_error_text() {
         &[oauth_secret.as_str(), "revoked-refresh-token"],
     );
 
-    // A refused connection ends at the deadline.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-
-    drop(listener);
-
+    // A refused connection ends at the deadline. Listening on port 1 needs root, so no fake started by a test running
+    // in parallel can own it (a port that was bound and released could be handed to one).
     let options = Options {
         deadline: Duration::from_millis(300),
-        endpoints: Endpoints::local(format!("http://{address}")),
+        endpoints: Endpoints::local("http://127.0.0.1:1"),
         ..oauth.fake.options()
     };
     let dir = TempDir::new().unwrap();

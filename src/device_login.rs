@@ -152,7 +152,7 @@ impl DeviceLogin {
                     retry_after,
                 }) => (description, retry_after),
                 Err(Failure::Reauthenticated) => continue,
-                Err(Failure::Fatal(error)) => return Err(self.expiry_or(error, expiry_comes_first)),
+                Err(Failure::Fatal(error)) => return Err(self.expiry_or(retrying.attribute(error), expiry_comes_first)),
             };
             let backoff = retrying.record_failure(&self.transport, &description);
             let delay = resend_delay(interval, backoff, retry_after);
