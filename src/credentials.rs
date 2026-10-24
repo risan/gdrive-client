@@ -129,7 +129,9 @@ impl Coordinator {
             None => (None, None),
         };
         let now = Instant::now();
-        let refresh_at = refresh_at_unix.map(|unix| now + Duration::from_secs(unix.saturating_sub(unix_now())));
+        // A moment too far away to represent leaves `refresh_at` empty, which refreshes on the first call.
+        let refresh_at =
+            refresh_at_unix.and_then(|unix| now.checked_add(Duration::from_secs(unix.saturating_sub(unix_now()))));
 
         Coordinator {
             state: Mutex::new(State {
@@ -339,7 +341,11 @@ pub(crate) struct Inspect {
 pub(crate) fn refresh_moments(received: Instant, received_unix: u64, expires_in: Duration) -> (Instant, u64) {
     let usable = expires_in.saturating_sub(REFRESH_MARGIN);
 
-    (received + usable, received_unix + usable.as_secs())
+    // An `expires_in` too large to represent is not a real lifetime: treat the token as due at once.
+    match received.checked_add(usable) {
+        Some(at) => (at, received_unix.saturating_add(usable.as_secs())),
+        None => (received, received_unix),
+    }
 }
 
 #[cfg(test)]

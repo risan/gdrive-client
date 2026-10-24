@@ -57,6 +57,9 @@ impl DeviceLogin {
                 .as_u64()
                 .ok_or_else(|| call.protocol_error("the answer has no expires_in"))?,
         );
+        let expires_at = started
+            .checked_add(expires_in)
+            .ok_or_else(|| call.protocol_error("expires_in is out of range"))?;
         let interval = body["interval"].as_u64().map_or(DEFAULT_INTERVAL, Duration::from_secs);
 
         Ok(DeviceLogin {
@@ -68,7 +71,7 @@ impl DeviceLogin {
             user_code: text("user_code")?,
             device_code,
             expires_in,
-            expires_at: started + expires_in,
+            expires_at,
             interval,
         })
     }
@@ -198,7 +201,7 @@ pub(crate) fn resend_delay(interval: Duration, backoff: Duration, retry_after: O
 
 /// RFC 8628 section 3.5: after `slow_down`, every later wait is 5 seconds longer.
 pub(crate) fn slow_down(interval: Duration) -> Duration {
-    interval + SLOW_DOWN_STEP
+    interval.saturating_add(SLOW_DOWN_STEP)
 }
 
 impl fmt::Debug for DeviceLogin {

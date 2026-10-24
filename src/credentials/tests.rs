@@ -69,6 +69,25 @@ fn refresh_at_is_receipt_plus_expires_in_minus_60() {
 }
 
 #[test]
+fn an_expiry_too_far_to_represent_means_refresh_now() {
+    let received = Instant::now();
+
+    assert_eq!(
+        refresh_moments(received, 1_000_000, Duration::from_secs(u64::MAX)),
+        (received, 1_000_000)
+    );
+
+    let coordinator = Coordinator::new(credentials(), Some((Secret::new("stored"), Some(u64::MAX))));
+    let token = coordinator
+        .token(&call(1000), Need::Current, &mut |_| Ok(refreshed("fresh")), &mut |_| {
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(token.secret.expose(), "fresh");
+}
+
+#[test]
 fn a_token_inside_the_margin_is_refreshed_on_every_call() {
     let coordinator = Coordinator::new(credentials(), None);
     let calls = AtomicUsize::new(0);

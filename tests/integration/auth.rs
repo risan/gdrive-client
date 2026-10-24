@@ -709,6 +709,21 @@ fn login_expired_by_google() {
 }
 
 #[test]
+fn device_code_lifetime_out_of_range_is_a_protocol_error() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(DeviceConfig {
+        expires_in: u64::MAX,
+        ..DeviceConfig::default()
+    });
+
+    let (client_id, client_secret, _) = fake.credentials();
+    let result = DeviceLogin::start(&client_id, &client_secret, &fake.options());
+
+    assert!(matches!(result, Err(Error::Protocol { .. })), "{result:?}");
+}
+
+#[test]
 fn login_expires_locally() {
     let fake = FakeDrive::start();
 
