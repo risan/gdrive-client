@@ -90,7 +90,7 @@ however large the file, no async runtime, and a static musl build, so neither ne
       delete and trash; backoff honors `Retry-After`, stops at the deadline, does not retry other 4xx.
 - [ ] AC5 [R9] — `MEASUREMENTS.md` gives peak RSS (VmHWM) of the example uploading and downloading a 1 GB file
       against the fake server with 8 MiB and 1 MiB chunks, and the static musl size of the example binary.
-- [ ] AC6 [R1, R5, R6] — An opt-in test (`GDRIVE_CLIENT_LIVE=1` plus a token file path) uploads, verifies, lists,
+- [x] AC6 [R1, R5, R6] — An opt-in test (`GDRIVE_CLIENT_LIVE=1` plus a token file path) uploads, verifies, lists,
       downloads and deletes a small file in a folder it creates, and removes the folder. It is run once against the
       real Drive with the user's bdgtransit credentials when they exist, recorded in the work folder; until then it
       is skipped and the check says so.
