@@ -56,12 +56,15 @@ impl DriveFile {
 impl Client {
     /// One file's id, name, size, MD5, parents and trashed flag.
     pub fn metadata(&self, file_id: &str) -> Result<DriveFile, Error> {
-        let call = self.call(Operation::Metadata, file_id);
+        self.fetch_metadata(&self.call(Operation::Metadata, file_id), file_id)
+    }
+
+    pub(crate) fn fetch_metadata(&self, call: &Call, file_id: &str) -> Result<DriveFile, Error> {
         let url = self.drive_url(
             &format!("/drive/v3/files/{}", encode_component(file_id)),
             &[("fields", FILE_FIELDS)],
         );
-        let answer = self.execute(&call, &Request::drive(Method::Get, url))?;
+        let answer = self.execute(call, &Request::drive(Method::Get, url))?;
         let value = call.expect_json(&answer, &[200])?;
 
         DriveFile::from_json(&value).map_err(|detail| call.protocol_error(&detail))

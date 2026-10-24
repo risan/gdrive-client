@@ -5,3 +5,4 @@ mod fake_drive;
 mod files;
 mod retry;
 mod support;
+mod upload;

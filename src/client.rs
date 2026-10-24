@@ -79,6 +79,14 @@ impl Client {
         call
     }
 
+    pub(crate) fn chunk_size(&self) -> usize {
+        self.options.chunk_size
+    }
+
+    pub(crate) fn drive_endpoint(&self) -> &str {
+        &self.options.endpoints.drive
+    }
+
     pub(crate) fn transport(&self) -> &Transport {
         &self.transport
     }

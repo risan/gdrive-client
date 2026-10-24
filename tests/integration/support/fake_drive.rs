@@ -50,7 +50,8 @@ pub enum Fault {
     DropAfterBody {
         persist: u64,
     },
-    /// Keep only `n` bytes of a chunk and answer 308 for them.
+    /// Keep the session's bytes up to the absolute offset `n` and answer 308 for `n`. An offset below what the session
+    /// already holds makes the fake lie: it reports `n` and keeps what it had.
     ReportRange(u64),
     SessionGone(u16),
     /// Answer an upload initiation with this `Location`.
@@ -1412,6 +1413,7 @@ impl State {
         }
 
         let body = &request.body;
+        let persisted_before = session.persisted;
 
         match range.span {
             None => {
@@ -1440,11 +1442,11 @@ impl State {
                     );
                 }
 
-                let kept = [modifier.drop_after, modifier.report_range]
-                    .into_iter()
-                    .flatten()
-                    .min()
-                    .map_or(body.len(), |limit| (limit as usize).min(body.len()));
+                let kept = match (modifier.drop_after, modifier.report_range) {
+                    (Some(persist), _) => (persist as usize).min(body.len()),
+                    (None, Some(offset)) => (offset.saturating_sub(session.persisted) as usize).min(body.len()),
+                    (None, None) => body.len(),
+                };
 
                 session.hasher.update(&body[..kept]);
                 session.persisted += kept as u64;
@@ -1463,10 +1465,14 @@ impl State {
             return self.finalize(&upload_id, modifier);
         }
 
+        let reported = match modifier.report_range {
+            Some(offset) if offset < persisted_before => offset,
+            _ => session.persisted,
+        };
         let mut response = Response::new(308);
 
-        if session.persisted > 0 {
-            response = response.header("Range", &format!("bytes=0-{}", session.persisted - 1));
+        if reported > 0 {
+            response = response.header("Range", &format!("bytes=0-{}", reported - 1));
         }
 
         Action::Respond(response)
