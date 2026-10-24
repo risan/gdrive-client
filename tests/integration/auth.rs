@@ -3,12 +3,13 @@
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gdrive_client::{Client, Credentials, Error, TokenStoreProblem};
+use gdrive_client::{Client, Credentials, Endpoints, Error, Options, TokenStoreProblem};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::support::{FakeDrive, read_only_dirs_are_enforced};
+use crate::support::{FakeDrive, Fault, Kind, env, read_only_dirs_are_enforced};
 
 fn store_in(dir: &TempDir) -> PathBuf {
     dir.path().join("token.json")
@@ -214,4 +215,391 @@ fn credentials_and_client_debug_hide_secrets() {
     }
 
     assert_eq!(credentials.client_id(), "client-id-1");
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+fn token_requests(fake: &FakeDrive) -> usize {
+    fake.requests_of(Kind::Token).len()
+}
+
+fn seed_file(fake: &FakeDrive) -> String {
+    fake.add_file("root", "seed.bin", b"seed")
+}
+
+fn bearer_of_last_get(fake: &FakeDrive) -> String {
+    fake.requests_of(Kind::Get)
+        .last()
+        .and_then(|record| record.authorization.clone())
+        .and_then(|header| header.strip_prefix("Bearer ").map(str::to_string))
+        .expect("a Get request with a bearer token")
+}
+
+#[test]
+fn first_call_refreshes_and_stores_the_access_token() {
+    let env = env();
+    let id = seed_file(&env.fake);
+
+    env.client.metadata(&id).unwrap();
+
+    let stored = read_json(&env.store_path());
+    let refresh_at = stored["access_token_refresh_at"].as_u64().expect("a refresh time");
+
+    assert_eq!(token_requests(&env.fake), 1);
+    assert_eq!(stored["access_token"], bearer_of_last_get(&env.fake));
+    assert!(refresh_at.abs_diff(unix_now() + 3540) <= 5, "{refresh_at}");
+    assert_eq!(mode_of(&env.store_path()), 0o600);
+}
+
+#[test]
+fn token_is_reused_until_60_seconds_before_expiry() {
+    let long = env();
+    let id = seed_file(&long.fake);
+
+    long.fake.set_expires_in(3600);
+
+    for _ in 0..3 {
+        long.client.metadata(&id).unwrap();
+    }
+
+    assert_eq!(token_requests(&long.fake), 1);
+
+    let short = env();
+    let id = seed_file(&short.fake);
+
+    short.fake.set_expires_in(59);
+
+    for _ in 0..3 {
+        short.client.metadata(&id).unwrap();
+    }
+
+    assert_eq!(token_requests(&short.fake), 3);
+}
+
+#[test]
+fn stored_token_is_used_after_reopen() {
+    let env = env();
+    let id = seed_file(&env.fake);
+
+    env.client.metadata(&id).unwrap();
+
+    let reopened = Client::open(env.store_path(), env.fake.options()).unwrap();
+
+    reopened.metadata(&id).unwrap();
+
+    assert_eq!(token_requests(&env.fake), 1);
+}
+
+#[test]
+fn a_401_refreshes_once_and_resends() {
+    let env = env();
+    let id = seed_file(&env.fake);
+
+    env.fake.fault(Kind::Get, Fault::Unauthorized);
+
+    env.client.metadata(&id).unwrap();
+
+    assert_eq!(token_requests(&env.fake), 2);
+    assert_eq!(env.fake.requests_of(Kind::Get).len(), 2);
+}
+
+#[test]
+fn a_second_401_is_an_error() {
+    let env = env();
+    let id = seed_file(&env.fake);
+
+    env.fake.fault(Kind::Get, Fault::Unauthorized);
+    env.fake.fault(Kind::Get, Fault::Unauthorized);
+
+    let error = env.client.metadata(&id).unwrap_err();
+
+    assert!(matches!(error, Error::Http { status: 401, .. }), "{error:?}");
+    assert_eq!(token_requests(&env.fake), 2);
+}
+
+#[test]
+fn invalid_grant_is_a_distinct_error() {
+    let env = env();
+    let (client_id, client_secret, _) = env.fake.credentials();
+    let client = Client::create(
+        store_in(&env.dir),
+        Credentials::new(client_id, client_secret, "revoked-refresh-token"),
+        env.fake.options(),
+    )
+    .unwrap();
+
+    let error = client.metadata("any-id").unwrap_err();
+
+    assert!(matches!(error, Error::InvalidGrant { .. }), "{error:?}");
+    assert!(error.to_string().contains("log in again"), "{error}");
+}
+
+#[test]
+fn failed_access_token_write_does_not_fail_the_call() {
+    let env = env();
+
+    if !read_only_dirs_are_enforced(env.dir.path()) {
+        eprintln!("skipped: read-only directories are not enforced (running as root)");
+        return;
+    }
+
+    let id = seed_file(&env.fake);
+    let before = fs::read(env.store_path()).unwrap();
+
+    env.fake.set_expires_in(3600);
+    make_read_only(env.dir.path());
+
+    let first = env.client.metadata(&id);
+    let failure = env.client.take_store_failure();
+    let second_failure = env.client.take_store_failure();
+    let again = env.client.metadata(&id);
+
+    make_writable(env.dir.path());
+
+    assert!(first.is_ok(), "{first:?}");
+    assert!(
+        matches!(
+            failure,
+            Some(Error::TokenStore {
+                problem: TokenStoreProblem::WriteFailed(_),
+                ..
+            })
+        ),
+        "{failure:?}"
+    );
+    assert!(second_failure.is_none());
+    assert_eq!(
+        fs::read(env.store_path()).unwrap(),
+        before,
+        "the store must be untouched"
+    );
+    assert!(again.is_ok());
+    assert_eq!(token_requests(&env.fake), 1, "the second call uses the in-memory token");
+
+    // The directory is writable again: the next refresh (forced by a 401) writes the newest token.
+    env.fake.set_expires_in(59);
+    env.fake.fault(Kind::Get, Fault::Unauthorized);
+
+    env.client.metadata(&id).unwrap();
+
+    assert_eq!(
+        read_json(&env.store_path())["access_token"],
+        bearer_of_last_get(&env.fake)
+    );
+    assert!(env.client.take_store_failure().is_none());
+}
+
+#[test]
+fn failed_write_of_rotated_credentials_fails_until_written() {
+    let env = env();
+
+    if !read_only_dirs_are_enforced(env.dir.path()) {
+        eprintln!("skipped: read-only directories are not enforced (running as root)");
+        return;
+    }
+
+    let id = seed_file(&env.fake);
+    let original_refresh_token = env.fake.credentials().2;
+
+    env.fake.rotate_refresh_tokens(true);
+    make_read_only(env.dir.path());
+
+    let first = env.client.metadata(&id);
+    let second = env.client.metadata(&id);
+    let requests_while_failing = token_requests(&env.fake);
+
+    make_writable(env.dir.path());
+
+    let third = env.client.metadata(&id);
+    let stored = read_json(&env.store_path());
+
+    for result in [&first, &second] {
+        assert!(
+            matches!(
+                result,
+                Err(Error::TokenStore {
+                    problem: TokenStoreProblem::WriteFailed(_),
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+    }
+
+    assert_eq!(
+        requests_while_failing, 1,
+        "no refresh with the old, now dead refresh token"
+    );
+    assert!(third.is_ok(), "{third:?}");
+    assert_ne!(stored["refresh_token"], original_refresh_token.as_str());
+    assert_eq!(env.fake.refresh_tokens(), [stored["refresh_token"].as_str().unwrap()]);
+    assert_eq!(token_requests(&env.fake), 1);
+}
+
+fn assert_clean(error: &Error, secrets: &[&str]) {
+    for text in [error.to_string(), format!("{error:?}")] {
+        for secret in secrets {
+            assert!(!text.contains(secret), "{secret} leaked into: {text}");
+        }
+    }
+}
+
+#[test]
+fn secrets_absent_from_error_text() {
+    let env = env();
+    let (_, client_secret, refresh_token) = env.fake.credentials();
+    let id = seed_file(&env.fake);
+
+    env.client.metadata(&id).unwrap();
+
+    let access_token = bearer_of_last_get(&env.fake);
+    let secrets = [client_secret.as_str(), refresh_token.as_str(), access_token.as_str()];
+
+    // A second 401.
+    env.fake.fault(Kind::Get, Fault::Unauthorized);
+    env.fake.fault(Kind::Get, Fault::Unauthorized);
+    assert_clean(&env.client.metadata(&id).unwrap_err(), &secrets);
+
+    // A Drive 403 whose message echoes every secret; the 401s above replaced the access token.
+    let access_token = bearer_of_last_get(&env.fake);
+    let secrets = [client_secret.as_str(), refresh_token.as_str(), access_token.as_str()];
+    let echo = format!("{client_secret} {refresh_token} {access_token}");
+
+    env.fake
+        .fault(Kind::Get, Fault::drive_error_with_message(403, "forbidden", &echo));
+
+    let error = env.client.metadata(&id).unwrap_err();
+    let text = error.to_string();
+
+    assert_clean(&error, &secrets);
+    assert!(text.contains("[redacted]") && text.contains("forbidden"), "{text}");
+
+    // An OAuth 400 whose description echoes the client secret and the refresh token.
+    let oauth = crate::support::env();
+    let (_, oauth_secret, oauth_refresh) = oauth.fake.credentials();
+    let body =
+        json!({"error": "invalid_request", "error_description": format!("bad {oauth_secret} and {oauth_refresh}")});
+
+    oauth
+        .fake
+        .fault(Kind::Token, Fault::status_with_body(400, &body.to_string()));
+
+    let error = oauth.client.metadata("any").unwrap_err();
+    let text = error.to_string();
+
+    assert_clean(&error, &[oauth_secret.as_str(), oauth_refresh.as_str()]);
+    assert!(
+        text.contains("[redacted]") && text.contains("invalid_request"),
+        "{text}"
+    );
+
+    // invalid_grant.
+    let revoked = Client::create(
+        store_in(&oauth.dir),
+        Credentials::new(
+            oauth.fake.credentials().0,
+            oauth_secret.clone(),
+            "revoked-refresh-token",
+        ),
+        oauth.fake.options(),
+    )
+    .unwrap();
+
+    assert_clean(
+        &revoked.metadata("any").unwrap_err(),
+        &[oauth_secret.as_str(), "revoked-refresh-token"],
+    );
+
+    // A refused connection ends at the deadline.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+
+    drop(listener);
+
+    let options = Options {
+        deadline: Duration::from_millis(300),
+        endpoints: Endpoints::local(format!("http://{address}")),
+        ..oauth.fake.options()
+    };
+    let dir = TempDir::new().unwrap();
+    let refused = Client::create(
+        store_in(&dir),
+        Credentials::new("id", oauth_secret.clone(), "refresh-secret-value"),
+        options,
+    )
+    .unwrap()
+    .metadata("any")
+    .unwrap_err();
+
+    assert!(matches!(refused, Error::Deadline { .. }), "{refused:?}");
+    assert_clean(&refused, &[oauth_secret.as_str(), "refresh-secret-value"]);
+}
+
+#[test]
+fn a_slow_refresh_is_shared_not_repeated() {
+    let env = crate::support::env_with(|options| options.deadline = Duration::from_secs(3));
+    let id = seed_file(&env.fake);
+
+    env.fake
+        .fault(Kind::Token, Fault::hook(|| std::thread::sleep(Duration::from_secs(1))));
+
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| env.client.metadata(&id));
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        let second = scope.spawn(|| env.client.metadata(&id));
+
+        (first.join().unwrap(), second.join().unwrap())
+    });
+
+    assert!(first.is_ok(), "{first:?}");
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!(token_requests(&env.fake), 1);
+
+    let bearers: Vec<_> = env
+        .fake
+        .requests_of(Kind::Get)
+        .iter()
+        .map(|record| record.authorization.clone())
+        .collect();
+
+    assert_eq!(bearers.len(), 2);
+    assert_eq!(bearers[0], bearers[1]);
+}
+
+#[test]
+fn concurrent_calls_refresh_once_with_rotation() {
+    let env = env();
+    let id = seed_file(&env.fake);
+    let original_refresh_token = env.fake.credentials().2;
+
+    env.fake.rotate_refresh_tokens(true);
+    env.fake.set_expires_in(3600);
+
+    let barrier = std::sync::Barrier::new(8);
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    env.client.metadata(&id)
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+
+    for result in &results {
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    let stored = read_json(&env.store_path());
+
+    assert_eq!(token_requests(&env.fake), 1);
+    assert_ne!(stored["refresh_token"], original_refresh_token.as_str());
+    assert_eq!(env.fake.refresh_tokens(), [stored["refresh_token"].as_str().unwrap()]);
 }

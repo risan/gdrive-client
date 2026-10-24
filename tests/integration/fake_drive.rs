@@ -342,7 +342,7 @@ fn faults_fire_once_in_order() {
     let fixture = fixture();
 
     fixture.fake.fault(Kind::List, Fault::status(503));
-    fixture.fake.fault(Kind::List, Fault::status_with_retry_after(429, "7"));
+    fixture.fake.fault(Kind::List, Fault::status(429).with_retry_after("7"));
     fixture
         .fake
         .fault_after(1, Kind::List, Fault::drive_error(403, "storageQuotaExceeded"));

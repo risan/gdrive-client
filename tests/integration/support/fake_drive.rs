@@ -91,11 +91,20 @@ impl Fault {
         }
     }
 
-    pub fn status_with_retry_after(code: u16, retry_after: &str) -> Fault {
-        match Fault::status(code) {
+    /// A Drive error body whose message is the given text, for tests that make Google echo a secret.
+    pub fn drive_error_with_message(code: u16, reason: &str, message: &str) -> Fault {
+        Fault::Status {
+            code,
+            retry_after: None,
+            body: drive_error_body(code, reason, message),
+        }
+    }
+
+    pub fn with_retry_after(self, value: &str) -> Fault {
+        match self {
             Fault::Status { code, body, .. } => Fault::Status {
                 code,
-                retry_after: Some(retry_after.to_string()),
+                retry_after: Some(value.to_string()),
                 body,
             },
             other => other,

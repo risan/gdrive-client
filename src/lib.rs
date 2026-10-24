@@ -9,6 +9,8 @@ compile_error!("gdrive-client reads and sets file mode bits and supports Unix on
 mod client;
 mod credentials;
 mod error;
+mod files;
+mod http;
 mod options;
 mod secret;
 mod token_store;
@@ -16,4 +18,5 @@ mod token_store;
 pub use client::Client;
 pub use credentials::Credentials;
 pub use error::{Error, Operation, TokenStoreProblem};
+pub use files::DriveFile;
 pub use options::{Endpoints, Options};

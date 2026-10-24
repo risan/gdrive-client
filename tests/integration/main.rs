@@ -2,4 +2,6 @@
 
 mod auth;
 mod fake_drive;
+mod files;
+mod retry;
 mod support;

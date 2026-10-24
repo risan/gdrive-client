@@ -8,10 +8,11 @@ mod wire;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gdrive_client::{Credentials, Endpoints, Options};
+use gdrive_client::{Client, Credentials, Endpoints, Options};
+use tempfile::TempDir;
 
 pub use fake_drive::{FakeDrive, Fault, Kind, ROOT_ID};
 
@@ -33,6 +34,40 @@ impl FakeDrive {
 
         Credentials::new(client_id, client_secret, refresh_token)
     }
+}
+
+/// A fake, a scratch directory and a client with a fresh token store (no access token yet).
+pub struct Env {
+    pub fake: FakeDrive,
+    pub dir: TempDir,
+    pub client: Client,
+}
+
+impl Env {
+    pub fn store_path(&self) -> PathBuf {
+        store_path(&self.dir)
+    }
+}
+
+pub fn store_path(dir: &TempDir) -> PathBuf {
+    dir.path().join("token.json")
+}
+
+pub fn env() -> Env {
+    env_with(|_| {})
+}
+
+/// Like [`env`], with the options adjusted first.
+pub fn env_with(adjust: impl FnOnce(&mut Options)) -> Env {
+    let fake = FakeDrive::start();
+    let dir = TempDir::new().expect("scratch directory");
+    let mut options = fake.options();
+
+    adjust(&mut options);
+
+    let client = Client::create(store_path(&dir), fake.valid_credentials(), options).expect("create the client");
+
+    Env { fake, dir, client }
 }
 
 /// Whether a read-only directory really stops file creation here (it does not for root).
