@@ -195,13 +195,13 @@ impl Call {
         }
     }
 
-    /// An OAuth endpoint's error: `invalid_grant` is its own error, other `error` codes keep Google's description.
+    /// An OAuth endpoint's error: a refresh token's `invalid_grant` is its own error, other `error` codes keep Google's description.
     pub fn oauth_error(&self, answer: &Answer) -> Error {
         let body = answer.json();
         let code = body.as_ref().and_then(|value| value["error"].as_str());
 
         match code {
-            Some("invalid_grant") => Error::InvalidGrant {
+            Some("invalid_grant") if self.operation == Operation::RefreshToken => Error::InvalidGrant {
                 operation: self.operation,
             },
             Some(code) => Error::OAuth {
@@ -528,12 +528,19 @@ impl Retrying {
         }
     }
 
-    /// Records the failure and returns the D7 delay: `Retry-After` when the answer had one, else jittered backoff.
-    pub fn next_delay(&mut self, transport: &Transport, description: &str, retry_after: Option<Duration>) -> Duration {
+    /// Records the failure and returns the next jittered backoff.
+    pub fn record_failure(&mut self, transport: &Transport, description: &str) -> Duration {
         let backoff = transport.backoff(self.attempt);
 
         self.attempt += 1;
         self.last_failure = description.to_string();
+        backoff
+    }
+
+    /// Records the failure and returns the D7 delay: `Retry-After` when the answer had one, else jittered backoff.
+    pub fn next_delay(&mut self, transport: &Transport, description: &str, retry_after: Option<Duration>) -> Duration {
+        let backoff = self.record_failure(transport, description);
+
         retry_after.unwrap_or(backoff)
     }
 

@@ -14,7 +14,7 @@ use std::time::Duration;
 use gdrive_client::{Client, Credentials, Endpoints, Options};
 use tempfile::TempDir;
 
-pub use fake_drive::{FakeDrive, Fault, Kind, ROOT_ID};
+pub use fake_drive::{DeviceConfig, DevicePoll, FakeDrive, Fault, Kind, ROOT_ID};
 
 impl FakeDrive {
     /// Both endpoints at the fake, a 5 s deadline, 10 to 50 ms backoff and 256 KiB chunks.

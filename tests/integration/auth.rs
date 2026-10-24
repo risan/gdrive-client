@@ -3,13 +3,13 @@
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use gdrive_client::{Client, Credentials, Endpoints, Error, Options, TokenStoreProblem};
+use gdrive_client::{Client, Credentials, DeviceLogin, Endpoints, Error, Options, TokenStoreProblem};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::support::{FakeDrive, Fault, Kind, env, read_only_dirs_are_enforced};
+use crate::support::{DeviceConfig, DevicePoll, FakeDrive, Fault, Kind, env, read_only_dirs_are_enforced};
 
 fn store_in(dir: &TempDir) -> PathBuf {
     dir.path().join("token.json")
@@ -602,4 +602,210 @@ fn concurrent_calls_refresh_once_with_rotation() {
     assert_eq!(token_requests(&env.fake), 1);
     assert_ne!(stored["refresh_token"], original_refresh_token.as_str());
     assert_eq!(env.fake.refresh_tokens(), [stored["refresh_token"].as_str().unwrap()]);
+}
+
+fn device_login(fake: &FakeDrive) -> DeviceLogin {
+    let (client_id, client_secret, _) = fake.credentials();
+
+    DeviceLogin::start(&client_id, &client_secret, &fake.options()).unwrap()
+}
+
+fn quick_device() -> DeviceConfig {
+    DeviceConfig {
+        interval: 0,
+        ..DeviceConfig::default()
+    }
+}
+
+#[test]
+fn device_login_shows_url_and_code_then_approves() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(DeviceConfig {
+        user_code: "WXYZ-1234".to_string(),
+        verification_url: "https://example.test/device".to_string(),
+        expires_in: 900,
+        ..quick_device()
+    });
+    fake.script_device_polls(&[DevicePoll::Pending, DevicePoll::Pending, DevicePoll::Approved]);
+
+    let login = device_login(&fake);
+
+    assert_eq!(login.verification_url(), "https://example.test/device");
+    assert_eq!(login.user_code(), "WXYZ-1234");
+    assert_eq!(login.expires_in(), Duration::from_secs(900));
+
+    let credentials = login.wait().unwrap();
+    let (client_id, client_secret, _) = fake.credentials();
+    let polls = fake.requests_of(Kind::DevicePoll);
+
+    assert_eq!(polls.len(), 3);
+
+    for poll in &polls {
+        assert_eq!(poll.form_value("client_id").as_deref(), Some(client_id.as_str()));
+        assert_eq!(
+            poll.form_value("client_secret").as_deref(),
+            Some(client_secret.as_str())
+        );
+        assert_eq!(poll.form_value("device_code").as_deref(), Some("fake-device-code"));
+        assert_eq!(
+            poll.form_value("grant_type").as_deref(),
+            Some("urn:ietf:params:oauth:grant-type:device_code")
+        );
+    }
+
+    let dir = TempDir::new().unwrap();
+
+    assert_eq!(credentials.client_id(), client_id);
+    Client::create(store_in(&dir), credentials, fake.options()).unwrap();
+    assert_eq!(read_json(&store_in(&dir))["refresh_token"], fake.device_refresh_token());
+}
+
+#[test]
+fn device_login_asks_for_drive_file_scope() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(quick_device());
+    device_login(&fake);
+
+    let requests = fake.requests_of(Kind::DeviceCode);
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].form_value("scope").as_deref(),
+        Some("https://www.googleapis.com/auth/drive.file")
+    );
+}
+
+#[test]
+fn slow_down_adds_five_seconds() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(quick_device());
+    fake.script_device_polls(&[DevicePoll::SlowDown, DevicePoll::Approved]);
+
+    device_login(&fake).wait().unwrap();
+
+    let polls = fake.requests_of(Kind::DevicePoll);
+
+    assert_eq!(polls.len(), 2);
+    assert!(polls[1].at - polls[0].at >= Duration::from_secs(5));
+}
+
+#[test]
+fn denied_login() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(quick_device());
+    fake.script_device_polls(&[DevicePoll::Pending, DevicePoll::Denied]);
+
+    assert!(matches!(device_login(&fake).wait(), Err(Error::LoginDenied)));
+}
+
+#[test]
+fn login_expired_by_google() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(quick_device());
+    fake.script_device_polls(&[DevicePoll::Expired]);
+
+    assert!(matches!(device_login(&fake).wait(), Err(Error::LoginExpired)));
+}
+
+#[test]
+fn login_expires_locally() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(DeviceConfig {
+        expires_in: 2,
+        interval: 1,
+        ..DeviceConfig::default()
+    });
+
+    let started = Instant::now();
+    let result = device_login(&fake).wait();
+
+    assert!(matches!(result, Err(Error::LoginExpired)), "{result:?}");
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+}
+
+#[test]
+fn poll_failures_retry_within_the_deadline() {
+    let fake = FakeDrive::start();
+    let (client_id, client_secret, _) = fake.credentials();
+    let options = Options {
+        deadline: Duration::from_secs(1),
+        ..fake.options()
+    };
+
+    fake.set_device(DeviceConfig {
+        expires_in: 60,
+        ..quick_device()
+    });
+    fake.always(Kind::DevicePoll, 503);
+
+    let login = DeviceLogin::start(&client_id, &client_secret, &options).unwrap();
+    let started = Instant::now();
+    let result = login.wait();
+
+    assert!(matches!(result, Err(Error::Deadline { .. })), "{result:?}");
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(fake.requests_of(Kind::DevicePoll).len() > 1);
+}
+
+#[test]
+fn poll_retry_waits_the_interval() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(DeviceConfig {
+        interval: 1,
+        ..DeviceConfig::default()
+    });
+    fake.fault(Kind::DevicePoll, Fault::status(503));
+    fake.script_device_polls(&[DevicePoll::Approved]);
+
+    device_login(&fake).wait().unwrap();
+
+    let polls = fake.requests_of(Kind::DevicePoll);
+
+    assert_eq!(polls.len(), 2);
+    assert!(
+        polls[1].at - polls[0].at >= Duration::from_secs(1),
+        "backoff alone is 10 ms"
+    );
+}
+
+#[test]
+fn device_login_debug_hides_code_and_secret() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(quick_device());
+
+    let text = format!("{:?}", device_login(&fake));
+
+    assert!(text.contains("fake-client-id"), "{text}");
+    assert!(!text.contains("fake-device-code"), "{text}");
+    assert!(!text.contains("fake-client-secret"), "{text}");
+}
+
+#[test]
+fn imported_rclone_credentials_work() {
+    let env = env();
+    let (client_id, client_secret, refresh_token) = env.fake.credentials();
+    let config = format!(
+        "[gdrive]\ntype = drive\nclient_id = {client_id}\nclient_secret = {client_secret}\nscope = drive.file\ntoken = {{\"access_token\":\"stale\",\"token_type\":\"Bearer\",\"refresh_token\":\"{refresh_token}\",\"expiry\":\"2020-01-01T00:00:00Z\"}}\n"
+    );
+    let config_path = env.dir.path().join("rclone.conf");
+
+    fs::write(&config_path, config).unwrap();
+
+    let credentials = Credentials::from_rclone_config(&config_path, "gdrive").unwrap();
+    let client = Client::create(env.dir.path().join("imported.json"), credentials, env.fake.options()).unwrap();
+    let id = seed_file(&env.fake);
+
+    assert!(client.metadata(&id).is_ok());
 }
