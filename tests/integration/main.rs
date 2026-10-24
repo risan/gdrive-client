@@ -2,6 +2,7 @@
 
 mod auth;
 mod download;
+mod example;
 mod fake_drive;
 mod files;
 mod retry;
