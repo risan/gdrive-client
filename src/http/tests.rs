@@ -162,3 +162,15 @@ fn url_encoding_keeps_only_unreserved_characters() {
 fn form_bodies_encode_each_value() {
     assert_eq!(form_body(&[("a", "1 2"), ("b", "x&y")]), "a=1%202&b=x%26y");
 }
+
+#[test]
+fn a_secret_is_remembered_once() {
+    let call = Call::new(Operation::Upload, "file", Duration::from_secs(60));
+
+    for _ in 0..1000 {
+        call.know(Secret::new("access-token"));
+    }
+
+    call.know_all([Secret::new("access-token"), Secret::new("other")]);
+    assert_eq!(call.secrets.borrow().len(), 2);
+}

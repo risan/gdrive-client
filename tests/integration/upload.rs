@@ -410,6 +410,24 @@ fn missing_fields_in_the_final_answer_are_fetched() {
 }
 
 #[test]
+fn a_deadline_while_fetching_the_missing_fields_still_reports_the_confirmed_bytes() {
+    let env = env_with(|options| options.deadline = Duration::from_millis(500));
+    let folder = target_folder(&env);
+    let data = pattern(300 * KIB);
+    let path = local_file(&env, "bare.bin", &data);
+
+    env.fake.fault_after(1, Kind::ChunkPut, Fault::OmitFields);
+    env.fake.always(Kind::Get, 503);
+
+    let error = env.client.upload_new(&path, &folder, "bare.bin").unwrap_err();
+
+    match &error {
+        Error::Deadline { confirmed_bytes, .. } => assert_eq!(*confirmed_bytes, Some(data.len() as u64)),
+        other => panic!("expected Deadline, got {other:?}"),
+    }
+}
+
+#[test]
 fn empty_file() {
     let env = env();
     let folder = target_folder(&env);

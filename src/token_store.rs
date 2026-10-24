@@ -71,12 +71,13 @@ fn parse(content: &[u8]) -> Result<StoredTokens, String> {
             .map(str::to_string)
             .ok_or_else(|| format!("{key} is missing or not a string"))
     };
-    let access_token = match &value["access_token"] {
+    let present = |key: &str| value.get(key).ok_or_else(|| format!("{key} is missing"));
+    let access_token = match present("access_token")? {
         Value::Null => None,
         Value::String(token) => Some(Secret::new(token.as_str())),
         _ => return Err("access_token must be a string or null".to_string()),
     };
-    let access_token_refresh_at = match &value["access_token_refresh_at"] {
+    let access_token_refresh_at = match present("access_token_refresh_at")? {
         Value::Null => None,
         other => Some(
             other

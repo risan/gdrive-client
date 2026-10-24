@@ -119,7 +119,9 @@ impl Client {
         let mut file = DriveFile::from_json(&value).map_err(|detail| call.protocol_error(&detail))?;
 
         if file.size.is_none() || file.md5.is_none() {
-            file = self.fetch_metadata(&call.derive(Operation::Metadata, file.id.clone()), &file.id)?;
+            file = self
+                .fetch_metadata(&call.derive(Operation::Metadata, file.id.clone()), &file.id)
+                .map_err(|error| error.with_confirmed_bytes(total))?;
         }
 
         Ok(Upload {

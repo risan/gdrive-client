@@ -167,3 +167,10 @@ fn token_refresh_is_retried() {
     assert!(env.client.metadata(&id).is_ok());
     assert_eq!(env.fake.requests_of(Kind::Token).len(), 2);
 }
+
+#[test]
+fn a_deadline_too_large_to_represent_does_not_panic() {
+    let (env, id) = env_with_file_and(|options| options.deadline = Duration::MAX);
+
+    assert_eq!(env.client.metadata(&id).unwrap().id, id);
+}

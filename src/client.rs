@@ -117,6 +117,9 @@ impl Client {
     }
 
     fn refresh(&self, call: &Call, credentials: &Credentials) -> Result<Refreshed, Error> {
+        // Another thread may have rotated the refresh token since this call started, so the call's own list can be stale.
+        call.know_all([credentials.client_secret.clone(), credentials.refresh_token.clone()]);
+
         let refresh_call = call.derive(Operation::RefreshToken, "");
         let form = form_body(&[
             ("grant_type", "refresh_token"),

@@ -104,6 +104,9 @@ impl<'a> Request<'a> {
     }
 }
 
+/// A budget longer than this is cut to it, so `Instant + budget` cannot overflow for a caller who means "no deadline".
+const LONGEST_BUDGET: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
+
 /// What one call is about and how long it may take. Secrets the call knows are removed from any text of Google's that
 /// enters an error.
 pub(crate) struct Call {
@@ -118,7 +121,7 @@ impl Call {
         Call {
             operation,
             target: target.into(),
-            deadline: Instant::now() + budget,
+            deadline: Instant::now() + budget.min(LONGEST_BUDGET),
             secrets: RefCell::new(Vec::new()),
         }
     }
@@ -144,12 +147,19 @@ impl Call {
         self.remaining().is_none()
     }
 
+    /// Adds a secret once: an upload registers its access token on every chunk, and the list must not grow with them.
     pub fn know(&self, secret: Secret) {
-        self.secrets.borrow_mut().push(secret);
+        let mut known = self.secrets.borrow_mut();
+
+        if !known.contains(&secret) {
+            known.push(secret);
+        }
     }
 
     pub fn know_all(&self, secrets: impl IntoIterator<Item = Secret>) {
-        self.secrets.borrow_mut().extend(secrets);
+        for secret in secrets {
+            self.know(secret);
+        }
     }
 
     pub fn redact(&self, text: &str) -> String {

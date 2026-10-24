@@ -42,8 +42,9 @@ impl DeviceLogin {
 
         let form = form_body(&[("client_id", client_id), ("scope", SCOPE)]);
         let request = Request::oauth(url(&options.endpoints.oauth, "/device/code", &[]), &form);
-        let started = Instant::now();
         let answer = transport.execute(&call, &request)?;
+        // The lifetime counts from the answer that carries the code, not from the retries that came before it.
+        let received = Instant::now();
         let body = call.expect_oauth_json(&answer)?;
         let text = |key: &str| {
             body[key]
@@ -57,7 +58,7 @@ impl DeviceLogin {
                 .as_u64()
                 .ok_or_else(|| call.protocol_error("the answer has no expires_in"))?,
         );
-        let expires_at = started
+        let expires_at = received
             .checked_add(expires_in)
             .ok_or_else(|| call.protocol_error("expires_in is out of range"))?;
         let interval = body["interval"].as_u64().map_or(DEFAULT_INTERVAL, Duration::from_secs);

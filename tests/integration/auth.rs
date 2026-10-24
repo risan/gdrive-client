@@ -151,6 +151,14 @@ fn open_reports_missing_unreadable_and_invalid_stores() {
             r#"{"version":1,"client_id":"a","client_secret":"b","access_token":null,"access_token_refresh_at":null}"#,
         ),
         (
+            "missing-access-token.json",
+            r#"{"version":1,"client_id":"a","client_secret":"b","refresh_token":"c","access_token_refresh_at":null}"#,
+        ),
+        (
+            "missing-refresh-time.json",
+            r#"{"version":1,"client_id":"a","client_secret":"b","refresh_token":"c","access_token":null}"#,
+        ),
+        (
             "version-2.json",
             r#"{"version":2,"client_id":"a","client_secret":"b","refresh_token":"c","access_token":null,"access_token_refresh_at":null}"#,
         ),
@@ -600,6 +608,51 @@ fn concurrent_calls_refresh_once_with_rotation() {
     assert_eq!(env.fake.refresh_tokens(), [stored["refresh_token"].as_str().unwrap()]);
 }
 
+#[test]
+fn a_refresh_error_hides_a_token_another_call_rotated() {
+    let env = env();
+    let first = env.fake.add_folder(crate::support::ROOT_ID, "a");
+
+    env.fake.add_folder(&first, "b");
+    env.client.folder_id("a").unwrap();
+    env.fake.rotate_refresh_tokens(true);
+
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+    // The slow call starts holding the old refresh token and sits inside its first request while a second call
+    // rotates the token.
+    env.fake.fault(
+        Kind::List,
+        Fault::hook(move || {
+            reached_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        }),
+    );
+
+    let (error, rotated) = std::thread::scope(|scope| {
+        let slow = scope.spawn(|| env.client.folder_id("a/b"));
+
+        reached_rx.recv().unwrap();
+        env.fake.fault(Kind::Get, Fault::Unauthorized);
+        env.client.metadata(&first).unwrap();
+
+        let rotated = env.fake.refresh_tokens().pop().unwrap();
+        let body = json!({"error": "invalid_request", "error_description": format!("bad {rotated}")});
+
+        env.fake.fault(Kind::List, Fault::Unauthorized);
+        env.fake
+            .fault(Kind::Token, Fault::status_with_body(400, &body.to_string()));
+        release_tx.send(()).unwrap();
+
+        (slow.join().unwrap().unwrap_err(), rotated)
+    });
+
+    assert!(matches!(error, Error::OAuth { .. }), "{error:?}");
+    assert_clean(&error, &[rotated.as_str()]);
+    assert!(error.to_string().contains("[redacted]"), "{error}");
+}
+
 fn device_login(fake: &FakeDrive) -> DeviceLogin {
     let (client_id, client_secret, _) = fake.credentials();
 
@@ -738,6 +791,29 @@ fn login_expires_locally() {
 
     assert!(matches!(result, Err(Error::LoginExpired)), "{result:?}");
     assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+}
+
+#[test]
+fn the_code_lifetime_starts_when_the_code_arrives() {
+    let fake = FakeDrive::start();
+
+    fake.set_device(DeviceConfig {
+        expires_in: 1,
+        ..quick_device()
+    });
+    fake.fault(Kind::DeviceCode, Fault::status(503).with_retry_after("2"));
+    fake.script_device_polls(&[DevicePoll::Approved]);
+
+    let started = Instant::now();
+    let login = device_login(&fake);
+
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "the retry waited for Retry-After"
+    );
+    login
+        .wait()
+        .expect("the retry delay must not use up the new code's lifetime");
 }
 
 #[test]
