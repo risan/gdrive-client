@@ -8,7 +8,47 @@ mod wire;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
+use std::path::Path;
+use std::time::Duration;
+
+use gdrive_client::{Credentials, Endpoints, Options};
+
 pub use fake_drive::{FakeDrive, Fault, Kind, ROOT_ID};
+
+impl FakeDrive {
+    /// Both endpoints at the fake, a 5 s deadline, 10 to 50 ms backoff and 256 KiB chunks.
+    pub fn options(&self) -> Options {
+        Options {
+            deadline: Duration::from_secs(5),
+            chunk_size: 256 * 1024,
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(50),
+            endpoints: Endpoints::local(self.url()),
+        }
+    }
+
+    /// The client id, client secret and refresh token the fake accepts.
+    pub fn valid_credentials(&self) -> Credentials {
+        let (client_id, client_secret, refresh_token) = self.credentials();
+
+        Credentials::new(client_id, client_secret, refresh_token)
+    }
+}
+
+/// Whether a read-only directory really stops file creation here (it does not for root).
+pub fn read_only_dirs_are_enforced(scratch: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scratch.join("probe-read-only");
+
+    std::fs::create_dir(&dir).expect("probe dir");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod probe");
+
+    let enforced = std::fs::File::create(dir.join("probe")).is_err();
+
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod probe back");
+    enforced
+}
 
 /// The agent every test uses to talk to the fake directly. It ignores proxy variables (nothing may leave the host),
 /// returns 4xx and 5xx as answers, and does not follow redirects: ureq's default of 10 redirects would reject the

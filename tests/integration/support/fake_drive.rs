@@ -6,9 +6,8 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use gdrive_client::{Endpoints, Options};
 use md5::{Digest, Md5};
 use serde_json::{Map, Value, json};
 
@@ -360,17 +359,6 @@ impl FakeDrive {
 
     pub fn url(&self) -> String {
         self.shared.base_url.clone()
-    }
-
-    /// Both endpoints at the fake, a 5 s deadline, 10 to 50 ms backoff and 256 KiB chunks.
-    pub fn options(&self) -> Options {
-        Options {
-            deadline: Duration::from_secs(5),
-            chunk_size: 256 * 1024,
-            initial_backoff: Duration::from_millis(10),
-            max_backoff: Duration::from_millis(50),
-            endpoints: Endpoints::local(self.url()),
-        }
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
