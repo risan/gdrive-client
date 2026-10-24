@@ -79,6 +79,10 @@ impl Client {
         call
     }
 
+    pub(crate) fn transport(&self) -> &Transport {
+        &self.transport
+    }
+
     pub(crate) fn drive_url(&self, path: &str, query: &[(&str, &str)]) -> String {
         url(&self.options.endpoints.drive, path, query)
     }
@@ -105,7 +109,7 @@ impl Client {
     }
 
     fn refresh(&self, call: &Call, credentials: &Credentials) -> Result<Refreshed, Error> {
-        let refresh_call = call.with_operation(Operation::RefreshToken);
+        let refresh_call = call.derive(Operation::RefreshToken, "");
         let form = form_body(&[
             ("grant_type", "refresh_token"),
             ("client_id", &credentials.client_id),

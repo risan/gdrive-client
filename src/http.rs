@@ -126,11 +126,12 @@ impl Call {
         }
     }
 
-    /// The same budget and secrets, under another operation name (a token refresh inside an upload).
-    pub fn with_operation(&self, operation: Operation) -> Call {
+    /// The same budget and secrets, under another operation and target (a token refresh inside an upload, a folder
+    /// creation inside a path walk).
+    pub fn derive(&self, operation: Operation, target: impl Into<String>) -> Call {
         Call {
             operation,
-            target: String::new(),
+            target: target.into(),
             deadline: self.deadline,
             secrets: RefCell::new(self.secrets.borrow().clone()),
         }

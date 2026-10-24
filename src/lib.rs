@@ -13,6 +13,7 @@ mod error;
 mod files;
 mod http;
 mod options;
+mod query;
 mod rclone;
 mod secret;
 mod token_store;
